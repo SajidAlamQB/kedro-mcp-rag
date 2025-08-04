@@ -1,28 +1,23 @@
-"""Kedro RAG System """
+"""Kedro RAG System"""
 
-import asyncio
 import httpx
 import chromadb
 from sentence_transformers import SentenceTransformer
-from typing import List, Dict, Optional, Callable
+from typing import List, Dict, Callable
 import re
-from langchain.agents import tool
-from langchain_openai import ChatOpenAI
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 class KedroRAG:
-    """Kedro Rag"""
-
     def __init__(self, persist_directory: str = "./kedro_knowledge_db"):
         self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
         self.client = chromadb.PersistentClient(path=persist_directory)
 
         try:
             self.collection = self.client.get_collection("kedro_knowledge")
-            logger.info(f"Loaded existing knowledge base")
+            logger.info(f"Loaded existing knowledge base with {self.collection.count()} chunks")
         except:
             self.collection = self.client.create_collection("kedro_knowledge")
             logger.info("Created new knowledge base")
@@ -31,15 +26,18 @@ class KedroRAG:
         """Format documentation content into chunks"""
         chunks = {}
 
-        # Split by sections (similar to dialog processing)
+        # Split by sections (headers)
         sections = re.split(r'\n#{1,3}\s+', content)
 
         for i, section in enumerate(sections):
             if section.strip():
-                # Create chunk ID similar to dialog_name
+                # Extract section title if possible
+                lines = section.strip().split('\n')
+                title = lines[0][:50] if lines else f"Section {i}"
+
                 chunk_id = f"kedro_doc_chunk_{i}"
                 chunks[chunk_id] = section.strip()
-                logger.info(f"Formatted chunk {chunk_id}")
+                logger.info(f"Formatted chunk {chunk_id}: {title}...")
 
         return chunks
 
@@ -49,8 +47,16 @@ class KedroRAG:
         def embedding_function(texts: List[str]) -> List:
             if isinstance(texts, str):
                 texts = [texts]
+
+            # encode returns numpy array or list of arrays
             embeddings = self.embedder.encode(texts)
-            return embeddings.tolist()
+
+            # If single text, return the embedding vector directly
+            if len(texts) == 1:
+                return embeddings[0].tolist()
+            else:
+                # For multiple texts, return list of embedding vectors
+                return [emb.tolist() for emb in embeddings]
 
         return embedding_function
 
@@ -69,59 +75,38 @@ class KedroRAG:
         # Create embeddings
         embedding_function = self.create_embedding_function()
 
+        # Prepare batch data for ChromaDB
+        ids = []
+        embeddings = []
+        documents = []
+        metadatas = []
+
         for chunk_id, chunk_text in formatted_chunks.items():
+            # Get single embedding vector for this chunk
             embedding = embedding_function(chunk_text)
 
-            self.collection.add(
-                embeddings=[embedding],
-                documents=[chunk_text],
-                metadatas=[{"chunk_id": chunk_id, "source": "kedro_docs"}],
-                ids=[chunk_id]
-            )
+            ids.append(chunk_id)
+            embeddings.append(embedding)
+            documents.append(chunk_text)
+            metadatas.append({"chunk_id": chunk_id, "source": "kedro_docs"})
+
+        self.collection.add(
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+            ids=ids
+        )
 
         logger.info(f"Added {len(formatted_chunks)} chunks to knowledge base")
 
-    def create_retrieval_tool(self) -> Callable:
-        """Create retrieval tool"""
+    async def search_docs(self, query: str, num_results: int = 5) -> Dict:
+        """Search Kedro documentation with structured results"""
         embedding_function = self.create_embedding_function()
-
-        @tool
-        def search_kedro_knowledge(query: str) -> str:
-            """Search Kedro documentation for relevant information"""
-            query_embedding = embedding_function(query)
-
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=3
-            )
-
-            if results['documents'] and results['documents'][0]:
-                # Combine multiple results
-                contexts = results['documents'][0]
-                return "\n\n".join(contexts)
-            else:
-                return "No relevant context found in Kedro documentation"
-
-        return search_kedro_knowledge
-
-
-# Adapted nodes for MCP integration
-class KedroMCPNodes:
-    """Adapted from agent_rag nodes for MCP server use"""
-
-    def __init__(self, rag_system: KedroRAG):
-        self.rag = rag_system
-        self.tool = self.rag.create_retrieval_tool()
-
-    async def search_kedro_docs(self, query: str) -> Dict:
-        """Adapted from invoke_agent - but returns structured data for MCP"""
-        # Direct search using embeddings
-        embedding_function = self.rag.create_embedding_function()
         query_embedding = embedding_function(query)
 
-        results = self.rag.collection.query(
+        results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=5
+            n_results=num_results
         )
 
         formatted_results = []
@@ -129,8 +114,9 @@ class KedroMCPNodes:
             for i, doc in enumerate(results['documents'][0]):
                 formatted_results.append({
                     "content": doc,
+                    "chunk_id": results['ids'][0][i] if results['ids'] else f"chunk_{i}",
                     "metadata": results['metadatas'][0][i] if results['metadatas'] else {},
-                    "relevance_score": 1 - results['distances'][0][i]
+                    "relevance_score": 1 - results['distances'][0][i] if results['distances'] else 0
                 })
 
         return {
@@ -139,92 +125,12 @@ class KedroMCPNodes:
             "total_results": len(formatted_results)
         }
 
-    async def answer_kedro_question(self, question: str, openai_api_key: str) -> Dict:
-        """Adapted from user_interaction_loop - single Q&A instead of loop"""
-        # Initialize LLM (from init_llm node)
-        llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0.0,
-            openai_api_key=openai_api_key
-        )
+    async def get_context(self, topic: str, num_results: int = 3) -> str:
+        """Get relevant context as a single string"""
+        search_results = await self.search_docs(topic, num_results)
 
-        # Get context using the tool
-        context = self.tool.invoke(question)
-
-        # Create prompt (adapted from create_chat_prompt)
-        prompt = f"""You are a helpful assistant who answers questions about the Kedro framework.
-
-Based on the following context from Kedro documentation, answer the user's question.
-
-Context:
-{context}
-
-Question: {question}
-
-Answer:"""
-
-        # Get LLM response
-        response = llm.invoke(prompt)
-
-        return {
-            "question": question,
-            "context": context,
-            "answer": response.content,
-            "model": "gpt-3.5-turbo"
-        }
-
-
-# Integration with MCP server
-async def integrate_with_mcp(mcp_server):
-    """Add RAG capabilities to existing MCP server"""
-    # Initialize RAG (similar to pipeline initialization)
-    rag_system = KedroRAG()
-
-    # Build knowledge base if needed
-    if rag_system.collection.count() == 0:
-        await rag_system.build_knowledge_base()
-
-    # Create nodes adapter
-    nodes = KedroMCPNodes(rag_system)
-
-    # Add tools to MCP server
-    @mcp_server.tool()
-    async def search_kedro_docs(query: str):
-        """Search Kedro documentation (adapted from agent tools)"""
-        return await nodes.search_kedro_docs(query)
-
-    @mcp_server.tool()
-    async def answer_kedro_question(question: str, api_key: str):
-        """Get AI-powered answer (adapted from agent executor)"""
-        return await nodes.answer_kedro_question(question, api_key)
-
-    return rag_system
-
-
-# Standalone testing (adapted from the original test approach)
-async def test_adapted_rag():
-    """Test the adapted RAG system"""
-    rag = KedroRAG()
-
-    # Build knowledge base
-    await rag.build_knowledge_base()
-
-    # Test search
-    nodes = KedroMCPNodes(rag)
-
-    test_queries = [
-        "How to create a custom dataset in Kedro?",
-        "What is a Kedro node?",
-        "Pipeline configuration"
-    ]
-
-    for query in test_queries:
-        print(f"\nQuery: {query}")
-        results = await nodes.search_kedro_docs(query)
-        print(f"Found {results['total_results']} results")
-        if results['results']:
-            print(f"Top result: {results['results'][0]['content'][:200]}...")
-
-
-if __name__ == "__main__":
-    asyncio.run(test_adapted_rag())
+        if search_results['results']:
+            contexts = [result['content'] for result in search_results['results']]
+            return "\n\n---\n\n".join(contexts)
+        else:
+            return "No relevant context found in Kedro documentation"

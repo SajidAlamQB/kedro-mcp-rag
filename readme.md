@@ -1,4 +1,4 @@
-# Kedro RAG MCP
+<img width="1005" height="738" alt="image" src="https://github.com/user-attachments/assets/5fdcdbfe-c59a-4c38-9383-08cd47ab5f6e" /># Kedro RAG MCP
 
 ## Prerequisites
 
@@ -113,22 +113,11 @@ conda info --envs  # Shows all conda environments
 
 ## Step 5: Test the Setup
 
-### 5.1 Test the RAG System Standalone
 
-```bash
-# In the kedro-mcp-rag directory
-cd /path/to/kedro-mcp-rag
-
-# Run the test script
-python kedro_rag.py
-```
-
-This should download the documentation and build the knowledge base.
-
-
-### 5.3 Restart Claude Desktop
+### 5.1 Restart Claude Desktop
 
 1. Completely quit Claude Desktop
 2. Restart Claude Desktop
 3. The MCP tools should now be available
+4. Ask it a kedro related question and it will use the tools to build knowledge DB at `/tmp/kedro_knowledge_db` if it doesn't already exist.
 

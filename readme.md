@@ -1,4 +1,4 @@
-<img width="1005" height="738" alt="image" src="https://github.com/user-attachments/assets/5fdcdbfe-c59a-4c38-9383-08cd47ab5f6e" /># Kedro RAG MCP
+# Kedro RAG MCP
 
 ## Prerequisites
 
@@ -120,4 +120,9 @@ conda info --envs  # Shows all conda environments
 2. Restart Claude Desktop
 3. The MCP tools should now be available
 4. Ask it a kedro related question and it will use the tools to build knowledge DB at `/tmp/kedro_knowledge_db` if it doesn't already exist.
+
+5. If you see the following in Claude Desktop settings then MCP is up and running with the RAG.
+
+<img width="1005" height="738" alt="image" src="https://github.com/user-attachments/assets/5fdcdbfe-c59a-4c38-9383-08cd47ab5f6e" />
+
 

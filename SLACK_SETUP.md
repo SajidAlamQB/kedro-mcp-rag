@@ -6,7 +6,7 @@ This guide will help you connect your MCP server to Slack API to fetch and store
 
 1. **Install Slack SDK:**
    ```bash
-   cd /Users/Huong_Nguyen/dev/kedro-mcp-rag
+   cd /path-to-your-repo/kedro-mcp-rag
    /opt/anaconda3/bin/pip install slack-sdk
    ```
 

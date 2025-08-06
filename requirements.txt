@@ -7,3 +7,6 @@ mcp[cli]>=1.6.0
 
 # HTTP client for fetching docs
 httpx>=0.28.1
+
+# Slack API integration
+slack-sdk>=3.27.0
